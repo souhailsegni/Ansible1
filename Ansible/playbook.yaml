@@ -1,0 +1,72 @@
+- name: Deploy existing Flask & Postgres images on Minikube
+  hosts: local
+  gather_facts: no
+  vars: # This is where you define your variables
+    namespace: flask-app
+    flask_image: you_app_image:latest   # ← update with your local image
+    postgres_image: postgres:latest
+    manifest_path: .
+
+  tasks:
+    - name: Start Minikube if needed
+      command: minikube start
+      register: mk
+      failed_when: mk.rc not in [0,104]
+
+    - name: Load local Flask image into Minikube
+      command: minikube image load {{ flask_image }}
+
+    - name: Load local Postgres image into Minikube
+      command: minikube image load {{ postgres_image }}
+
+    - name: Create namespace
+      community.kubernetes.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Namespace
+          metadata:
+            name: "{{ namespace }}"
+
+    - name: Apply Postgres stack
+      community.kubernetes.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        src: postgres.yaml
+
+    - name: Apply Flask app stack
+      community.kubernetes.k8s:
+        state: present
+        namespace: "{{ namespace }}"
+        src: flask.yaml
+
+    - name: Wait for Postgres pod to be Ready
+      community.kubernetes.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - app=postgres
+      register: pg_pod
+      until: pg_pod.resources | length > 0 and pg_pod.resources[0].status.phase == "Running"
+      retries: 12
+      delay: 5
+
+    - name: Wait for Flask pod to be Ready
+      community.kubernetes.k8s_info:
+        kind: Pod
+        namespace: "{{ namespace }}"
+        label_selectors:
+          - app=flask
+      register: flask_pod
+      until: flask_pod.resources | length > 0 and flask_pod.resources[0].status.phase == "Running"
+      retries: 12
+      delay: 5
+
+    - name: Show access info
+      debug:
+        msg: |
+          Your app should now be up!
+          • Flask → http://$(minikube ip):30007
+          • Postgres is available internally at “postgres:5432”
+
+
